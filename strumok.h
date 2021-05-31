@@ -696,6 +696,6 @@ public:
     // void inline next_stream_full_crypt(uint64_t *in, uint64_t *out_stream);
     // void inline next_stream_test();
 
-    uint64_t z_0;
+    uint32_t z_0;
     bool inline get_first_keystream_bit();
 };

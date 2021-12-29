@@ -1,11 +1,12 @@
 #include "strumok.cpp"
-#include <time.h>
-#include <math.h>
+#include <ctime>
+#include <cmath>
 #include <vector>
-#include <iterator>
-#include <algorithm>
-#include <stdlib.h>
+// #include <iterator>
+#include <parallel/algorithm>
+#include <cstdlib>
 #include <fstream>
+#include <omp.h>
 // #include <sstream>
 
 
@@ -13,7 +14,7 @@ void print_MDM_signature(uint64_t number){
   for(uint8_t i = 0; i < 64; i++){
     cout << ((number >> i) & 1);
   }
-  cout << endl;
+  cout << '\n';
 }
 
 
@@ -70,7 +71,8 @@ uint8_t inline get_count_of_zeros(uint64_t number){
 uint8_t inline MDM_test(vector<uint16_t> bitset, uint8_t key_size, bool verbose, bool allow_key, bool big_endian){
   uint64_t MDM_signature = 0;
   uint16_t bitset_size = bitset.size();
-  for(int i = 1; i < pow(2, bitset_size); i++){
+  // #pragma omp parallel for
+  for(uint32_t i = 1; i < pow(2, bitset_size); i++){
     uint64_t iv[4] = {0};
     uint64_t *key = new uint64_t[key_size / 8];
     for(uint8_t j = 0; j < key_size / 8; j++){
@@ -114,7 +116,7 @@ uint8_t inline MDM_test(vector<uint16_t> bitset, uint8_t key_size, bool verbose,
     }
   }
   // S.emplace_back(best_bit);
-  cout << "Best bit: " << (unsigned)best_bit << " Zeros: " << (unsigned)max << endl;
+  cout << "Best bit: " << (unsigned)best_bit << " Zeros: " << (unsigned)max << '\n';
   output << (unsigned)best_bit << ',' << (unsigned)max << '\n';
   // return S;
   return best_bit;
@@ -149,9 +151,9 @@ vector<uint16_t> greedy_MDM_Stankovski(uint8_t n, vector<uint16_t> S, uint16_t k
 void print_2d(vector<vector<uint16_t>> v){
   for(uint16_t i = 0; i < v.size(); ++i){
     for(uint8_t j = 0; j < v[i].size(); ++j){
-      cout << (unsigned)v[i][j] << ' ';
+      cout << v[i][j] << ' ';
     }
-    cout << endl;
+    cout << '\n';
   }
 }
 
@@ -162,7 +164,7 @@ void print_2d_with_pairs(vector<pair<vector<uint16_t>, int8_t>> v){
     for(uint8_t j = 0; j < v[i].first.size(); ++j){
       cout << v[i].first[j] << ' ';
     }
-    cout << "}, " << (unsigned)v[i].second << ')' << endl;
+    cout << "}, " << (unsigned)v[i].second << ')' << '\n';
   }
 }
 
@@ -174,14 +176,14 @@ bool sortbysecdesc(const pair<vector<uint16_t>, int8_t> &a, const pair<vector<ui
 
 vector<pair<vector<uint16_t>, int8_t>> find_best(vector<uint16_t> B, vector<uint16_t> C, uint8_t k, uint8_t n, uint8_t key_size, bool big_endian){
   vector<pair<vector<uint16_t>, int8_t>> S;
-  int8_t * max_values = new int8_t[k];
+  int8_t * max_values = new int8_t[(unsigned)k];
   for(uint8_t i = 0; i < k; ++i){
     max_values[i] = -1;
   }
   for(uint16_t i = 0; i < B.size(); ++i){
     if(count(C.begin(), C.end(), B[i]) == 0){
       pair<vector<uint16_t>, int8_t> temp;
-      temp.first = C;
+      temp.first.insert(temp.first.end(), C.begin(), C.end());
       temp.first.emplace_back(B[i]);
       temp.second = MDM_test(temp.first, key_size, false, true, big_endian);
       for(uint8_t j = 0; j < k; ++j){
@@ -198,121 +200,146 @@ vector<pair<vector<uint16_t>, int8_t>> find_best(vector<uint16_t> B, vector<uint
       }
     }
   }
+  // cout << "Before delete k = " << (unsigned)k << '\n';
   delete[] max_values;
   return S;
-
-
 }
 
 
-void slightly_greedy(uint8_t key_size, uint8_t m, vector<uint8_t> k, vector<uint8_t> n, vector<double> alpha, bool big_endian){
+void slightly_greedy(uint8_t key_size, uint8_t m, vector<uint8_t> k, vector<uint8_t> n, vector<double> alpha, bool big_endian, ofstream &output, ofstream &bitset){
+  // cout << "BEFORE DEF B\n";
   vector<uint16_t> B;
   for(uint16_t i = 0; i < 256 + key_size * 8; ++i){
     B.emplace_back(i);
   }
-
-  ofstream output;
-  output.open("result_slightly_greedy.csv");
-  ofstream bitset;
-  bitset.open("slightly_greedy_bitset.txt");
-
+  // cout << "START\n";
   vector<pair<vector<uint16_t>, int8_t>> S;
   S.emplace_back();
   for(uint8_t i = 0; i < m; ++i){
-    cout << "Iteration: " << (unsigned)(i + 1) << endl;
+    cout << "Iteration: " << (unsigned)(i + 1) << '\n';
     vector<pair<vector<uint16_t>, int8_t>> temp;
-    for(uint32_t j = 0; j < S.size(); ++j){
-      vector<vector<pair<vector<uint16_t>, int8_t>>> L_c;
-      L_c.emplace_back(find_best(B, S[j].first, k[i], n[i], key_size, big_endian));
-      for(uint32_t t = 0; t < L_c.size(); ++t){
-        for(uint32_t r = 0; r < L_c[t].size(); ++r){
-          temp.emplace_back(L_c[t][r]);
-        }
-      }
 
+
+    uint32_t S_size = S.size();
+    // cout << "PARALLEL FOR LOOP\n";
+    vector<pair<vector<uint16_t>, int8_t>> L_c;
+    uint32_t j;
+    // #pragma omp parallel for private(j, L_c) shared(i, S_size, temp, S, k, n, key_size, big_endian)
+    for(j = 0; j < S_size; ++j){
+      // if(j % 1000 == 0){
+      //   cout << "J = " << (unsigned)j << " PROCESS_ID = " << omp_get_thread_num() << '\n';
+      // }
+      L_c  = find_best(B, S[j].first, k[i], n[i], key_size, big_endian);
+      // #pragma omp critical
+      // {
+        temp.insert(temp.end(), L_c.begin(), L_c.end());
+      // }
     }
-    S.clear();
-    S = temp;
 
+
+    // #pragma omp parallel for
+    // for(uint32_t j = 0; j < S.size(); ++j){
+    //   vector<vector<pair<vector<uint16_t>, int8_t>>> L_c;
+    //   L_c.emplace_back(find_best(B, S[j].first, k[i], n[i], key_size, big_endian));
+    //   cout << "L_C size = " << (unsigned)L_c.size() << '\n';
+    //   for(uint32_t t = 0; t < L_c.size(); ++t){
+    //     for(uint32_t r = 0; r < L_c[t].size(); ++r){
+    //       temp.emplace_back(L_c[t][r]);
+    //     }
+    //   }
+    //
+    // }
+    // cout << "BEFORE clear\n";
+    S.clear();
+    S.insert(S.end(), temp.begin(), temp.end());
+    // temp.clear();
+    // clock_t begin = clock();
     sort(S.begin(), S.end(), sortbysecdesc);
+    // clock_t end = clock();
+    // double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
+    // cout << "Sort: " << time_spent << " seconds\n";
     uint32_t max_size = (uint32_t)((alpha[i] * S.size()) + 0.5);
-    cout << "Max size: " << (unsigned)max_size << endl;
+    cout << "Max size: " << max_size << '\n';
     if(max_size < 50){
       max_size = 50;
     }
-    cout << "Number of bitsets: " << (unsigned)S.size() << endl;
+    cout << "Number of bitsets: " << S.size() << '\n';
     if(S.size() > max_size){
-      // cout << "ERASE" << endl;
+      // cout << "ERASE" << '\n';
       S.erase(S.begin() + max_size, S.end());
     }
-    cout << "Number of bitsets after erase: " << (unsigned)S.size() << endl;
+    cout << "Number of bitsets after erase: " << S.size() << '\n';
     output << (unsigned)S[0].second << '\n';
-
+    cout << "ZEROS: " << (unsigned)S[0].second << '\n';
+    sort(S[0].first.begin(), S[0].first.end());
     bitset << "({ ";
     for(uint8_t j = 0; j < S[0].first.size(); ++j){
       bitset << S[0].first[j] << ' ';
     }
-    bitset << "}, " << (unsigned)S[0].second << ')' << endl;
+    bitset << "}, " << (unsigned)S[0].second << ')' << '\n';
   }
-  output.close();
-
-
-
-  // for(uint32_t i = 0; i < S.size(); ++i){
-
-  // }
-
-  bitset.close();
-
-  print_2d_with_pairs(S);
+  // print_2d_with_pairs(S);
 }
 
 
 int main(){
-    uint64_t key[4];
-    uint64_t iv[4];
-    iv[0] = 0x0000000000000001;//1;
-    iv[1] = 0x0000000000000002;//2;
-    iv[2] = 0x0000000000000003;//3;
-    iv[3] = 0x0000000000000004;//4;
-
-    // uint8_t key_size = 32;
-
-    // key[7] = 0x8000000000000000;
-    // key[6] = 0x0000000000000000;
-    // key[5] = 0x0000000000000000;
-    // key[4] = 0x0000000000000000;
-    key[3] = 0x8000000000000000;
-    key[2] = 0x0000000000000000;
-    key[1] = 0x0000000000000000;
-    key[0] = 0x0000000000000000;
-    //
-    // bool verbose = false;
-    bool big_endian = false;
-
-    iv[0] = 0;
-    iv[1] = 0;
-    iv[2] = 0;
-    iv[3] = 0;
-    key[0] = 0;
-    key[1] = 0;
-    key[2] = 0;
-    key[3] = 0;
 
     clock_t begin = clock();
-    vector<uint8_t> k =    {50, 50, 5, 5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
-    vector<uint8_t> n =    {4, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5};
-    vector<double> alpha = {1, 0.1, 0.1, 0.5, 0.2, 0.2, 0.15, 0.01, 0.5, 0.5, 0.3, 0.3, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.1};
+    vector<uint8_t> k =    {50, 50, 5, 5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
+    vector<uint8_t> n =    {4, 2, 3, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5};
+    vector<double> alpha = {1, 0.1, 0.3, 0.2, 0.2, 0.2, 0.2, 0.1, 0.2, 0.3, 0.3, 0.3, 0.2, 0.2, 0.3, 0.2, 0.2, 0.2, 0.2, 0.1};
     unsigned short m;
     cout << "Max size: ";
     cin >> m;
-    cout << endl;
+    cout << '\n';
 
-    vector<uint16_t> test = {307, 402, 440, 308, 392, 442, 432, 433, 411, 410};
-    sort(test.begin(), test.end());
-    cout << (unsigned)MDM_test(test, 64, false, true, big_endian) << endl;
 
-    slightly_greedy(64, m, k, n, alpha, big_endian);
+    bool big_endian = false;
+    //vector<uint16_t> test = {307, 402, 440, 308, 392, 442, 432, 433, 411, 410};
+    vector<uint16_t> test = {307, 308, 392, 402, 410, 411, 432, 433, 440, 442};
+    // sort(test.begin(), test.end());
+    cout << (unsigned)MDM_test(test, 64, false, true, big_endian) << '\n';
+    vector<vector<uint8_t>> ks;
+    vector<vector<double>> alphas;
+    uint8_t key_size[2] = {64, 32};
+    ks.resize(4);
+    alphas.resize(4);
+    ks[0] = k;
+    ks[1] = {50, 30, 10, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2};
+    ks[2] = {50, 30, 5, 5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
+    ks[3] = {200, 150, 2, 2, 2, 2, 2, 3, 3, 2, 2, 2, 2, 2, 2, 2};
+    alphas[0] = alpha;
+    alphas[1] = {1, 1, 0.3, 0.01, 0.3, 0.5, 0.5, 0.5, 0.1, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5};
+    alphas[2] = {1, 1, 0.5, 0.5, 0.2, 0.2, 0.15, 0.01, 0.5, 0.5, 0.3, 0.3, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.1};
+    alphas[3] = {1, 1, 0.5, 0.5, 0.5, 0.01, 0.1, 0.3, 0.3, 0.3, 1, 0.5, 0.5, 0.1, 0.5, 0.5};
+    // for(uint8_t i = 0; i < 1; ++i){
+    //   for(uint8_t j = 3; j < 4; ++j){
+        // ofstream output;
+        // output.open("results/test_64_2_result_" + to_string(key_size[0]) + '_' + to_string(1) + ".txt");
+        // ofstream bitset;
+        // bitset.open("results/test_64_2_bitset_" + to_string(key_size[0]) + '_' + to_string(1) + ".txt");
+    //
+    //     slightly_greedy(key_size[i], m, ks[j], n, alphas[j], big_endian, output, bitset);
+    //
+    //     output.close();
+    //     bitset.close();
+    //   }
+    // }
+
+    // slightly_greedy(key_size[0], m, ks[2], n, alphas[2], big_endian, output, bitset);
+
+    // cout << "BEFORE ofstream\n";
+    // ofstream output;
+    // output.open("results/result_slightly_greedy_3.txt");
+    // ofstream bitset;
+    // bitset.open("results/slightly_greedy_bitset_3.txt");
+    // // cout << "BEFORE CALL\n";
+    // slightly_greedy(64, m, ks[3], n, alphas[3], big_endian, output, bitset);
+
+    // output.close();
+    // bitset.close();
+
+    // slightly_greedy(64, m, k, n, alpha, big_endian);
     clock_t end = clock();
     double time_spent = (double)(end - begin) / CLOCKS_PER_SEC;
     cout << "Time: " << time_spent << " seconds";
@@ -325,13 +352,13 @@ int main(){
     // uint8_t key_size = 64;
     // bool big_endian = false;//true;//false;
     // vector<uint16_t> bitset = {};// {296, 297, 303, 304, 305, 308, 310, 317, 318, 319, 384, 386, 397, 398, 401, 414, 418, 422, 435, 446};
-    // cout << "Bitset size now: " << bitset.size() << endl;
+    // cout << "Bitset size now: " << bitset.size() << '\n';
     // cout << "Bitset size: ";
     // cin >> n;
-    // // cout << (unsigned)n << endl;
+    // // cout << (unsigned)n << '\n';
     // vector<uint16_t> result = greedy_MDM_Stankovski((uint8_t)n, bitset, key_size, big_endian);
     // // vector<uint16_t> result = {14};
-    // cout << (unsigned)MDM_test(result, key_size, true, true, big_endian) << endl;
+    // cout << (unsigned)MDM_test(result, key_size, true, true, big_endian) << '\n';
     // sort(result.begin(), result.end());
     // for(uint8_t i = 0; i < result.size(); i++){
     //   cout << (unsigned)result[i] << ' ';
@@ -343,7 +370,7 @@ int main(){
 
     //greedy_MDM_Stankovski end
 
-    cout << endl;
+    cout << '\n';
 
     return 0;
 }
